@@ -1,0 +1,12 @@
+{application, texas_mysql,
+ [
+  {description, "mysql driver for texas"},
+  {vsn, "0.0.1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, {}},
+  {env, []}
+ ]}.
