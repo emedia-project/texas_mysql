@@ -7,6 +7,7 @@
 
 -define(STRING_SEPARATOR, $").
 -define(STRING_QUOTE, $\\).
+-define(FIELD_SEPARATOR, $`).
 
 -type connection() :: any().
 -type err() :: any().
@@ -44,7 +45,7 @@ connect(User, Password, Server, Port, Database, Options) ->
 -spec close(connection()) -> ok | error.
 close(Conn) ->
   try 
-    emysql:remove_pool(Conn)
+    emysql:remove_pool(texas:connection(Conn))
   catch
     _:_ -> error
   end.
@@ -76,7 +77,7 @@ insert(Conn, Table, Record) ->
   {Fields, Values} = lists:foldl(fun(Field, {FieldsAcc, ValuesAcc}) ->
           case Record:Field() of
             undefined -> {FieldsAcc, ValuesAcc};
-            Value -> {FieldsAcc ++ ["`"++atom_to_list(Field)++"`"], 
+            Value -> {FieldsAcc ++ [texas_sql:to_sql_field(Field, ?FIELD_SEPARATOR)], 
                       ValuesAcc ++ [texas_sql:to_sql_string(Value, ?STRING_SEPARATOR, ?STRING_QUOTE)]}
           end
       end, {[], []}, Table:fields()),
@@ -106,10 +107,10 @@ select(Conn, Table, Type, Clauses) ->
       case Type of
         first -> 
           [Data|_] = emysql:as_json(Result),
-          Table:new(assoc(Table, Data));
+          Table:new(Conn, assoc(Table, Data));
         _ ->
           lists:map(fun(Data) ->
-                Table:new(assoc(Table, Data))
+                Table:new(Conn, assoc(Table, Data))
             end, emysql:as_json(Result))
       end;
     {error_packet, _, _, _, E} -> {error, E}
@@ -124,7 +125,7 @@ update(Conn, Table, Record, UpdateData) ->
             end
         end, [], Table:fields()), " AND "),
   Set = join(UpdateData, ", "),
-  SQLCmd = "UPDATE `" ++ atom_to_list(Table) ++ "` SET " ++ Set ++ " WHERE " ++ Where ++ ";",
+  SQLCmd = "UPDATE " ++ texas_sql:to_sql_field(Table, ?FIELD_SEPARATOR) ++ " SET " ++ Set ++ " WHERE " ++ Where ++ ";",
   lager:debug("~s", [SQLCmd]),
   case exec(SQLCmd, Conn) of
     {ok_packet, _, _, _, _, _, _} ->
@@ -148,7 +149,7 @@ delete(Conn, Table, Record) ->
 % Private --
 
 exec(SQL, Conn) ->
-  emysql:execute(Conn, list_to_binary(SQL)).
+  emysql:execute(texas:connection(Conn), list_to_binary(SQL)).
 
 assoc(Table, Datas) ->
   lists:map(fun({Col, Value}) ->
