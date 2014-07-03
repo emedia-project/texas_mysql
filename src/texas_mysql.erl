@@ -2,8 +2,9 @@
 
 -export([start/0]).
 -export([connect/6, exec/2, close/1]).
--export([create_table/2]).
+-export([create_table/2, create_table/3]).
 -export([insert/3, select/4, update/4, delete/3]).
+-export([string_separator/0, string_quote/0, field_separator/0]).
 
 -define(STRING_SEPARATOR, $").
 -define(STRING_QUOTE, $\\).
@@ -17,6 +18,10 @@
 -type clause() :: {clause_type(), string(), [tuple()]} |
                   {clause_type(), string(), []}.
 -type clauses() :: [clause()] | [].
+
+string_separator() -> ?STRING_SEPARATOR.
+string_quote()     -> ?STRING_QUOTE.
+field_separator()  -> ?FIELD_SEPARATOR.
 
 -spec start() -> ok.
 start() ->
@@ -59,36 +64,56 @@ create_table(Conn, Table) ->
             sql(
               column_def, 
               atom_to_list(Field),
-              Table:type(Field),
-              Table:len(Field),
-              Table:autoincrement(Field),
-              Table:not_null(Field),
-              Table:unique(Field),
-              Table:default(Field))
-        end, Table:fields())),
+              Table:'-type'(Field),
+              Table:'-len'(Field),
+              Table:'-autoincrement'(Field),
+              Table:'-not_null'(Field),
+              Table:'-unique'(Field),
+              Table:'-default'(Field))
+        end, Table:'-fields'())),
   lager:debug("~s", [SQLCmd]),
   case exec(SQLCmd, Conn) of 
     {ok_packet, _, _, _, _, _, _} -> ok;
     _ -> error
   end.
 
--spec insert(connection(), tablename(), data()) -> data() | {error, err()}.
+-spec create_table(connection(), tablename(), list()) -> ok | error.
+create_table(Conn, Table, Fields) ->
+  SQLCmd = sql(
+    create_table, 
+    atom_to_list(Table), 
+    lists:map(fun({Field, Options}) ->
+            sql(
+              column_def, 
+              atom_to_list(Field),
+              texas_sql:get_option(type, Options),
+              texas_sql:get_option(len, Options),
+              texas_sql:get_option(autoincrement, Options),
+              texas_sql:get_option(not_null, Options),
+              texas_sql:get_option(unique, Options),
+              texas_sql:get_option(default, Options))
+        end, Fields)),
+  lager:debug("~s", [SQLCmd]),
+  case exec(SQLCmd, Conn) of 
+    {ok_packet, _, _, _, _, _, _} -> ok;
+    _ -> error
+  end.
+
+-spec insert(connection(), tablename(), data() | list()) -> data() | ok | {error, err()}.
 insert(Conn, Table, Record) ->
-  {Fields, Values} = lists:foldl(fun(Field, {FieldsAcc, ValuesAcc}) ->
-          case Record:Field() of
-            undefined -> {FieldsAcc, ValuesAcc};
-            Value -> {FieldsAcc ++ [texas_sql:to_sql_field(Field, ?FIELD_SEPARATOR)], 
-                      ValuesAcc ++ [texas_sql:to_sql_string(Value, ?STRING_SEPARATOR, ?STRING_QUOTE)]}
-          end
-      end, {[], []}, Table:fields()),
-  SQLCmd = sql(insert, atom_to_list(Table), Fields, Values),
+  SQLCmd = "INSERT INTO " ++ 
+           texas_sql:sql_field(Table, ?MODULE) ++
+           texas_sql:insert_clause(Record, ?MODULE),
   lager:debug("~s", [SQLCmd]),
   case exec(SQLCmd, Conn) of
     {ok_packet, _, _, ID, _, _, _} ->
-      case Table:table_pk_id() of
-        {none, null} -> Record;
-        {ok, Col} -> select(Conn, Table, first, 
-                            [{where, io_lib:format("`~p` = :id", [Col]), [{id, ID}]}])
+      case texas_sql:defined_table(Table) of
+        true ->
+          case Table:'-table_pk_id'() of
+            {none, null} -> Record;
+            {ok, Col} -> select(Conn, Table, first, [{where, [{Col, ID}]}])
+          end;
+        false -> ok
       end;
     {error_packet, _, _, _, E} -> {error, E}
   end.
@@ -96,10 +121,14 @@ insert(Conn, Table, Record) ->
 -spec select(connection(), tablename(), first | all, clauses()) -> 
   data() | [data()] | [] | {error, err()}.
 select(Conn, Table, Type, Clauses) -> 
-  SQLCmd = sql(select, atom_to_list(Table), sql(clause, Clauses ++ case Type of
-          first -> [{limit, "1", []}];
-          _ -> []
-        end)),
+  SQLCmd = "SELECT * FROM " ++
+           texas_sql:sql_field(Table, ?MODULE) ++
+           texas_sql:where_clause(texas_sql:clause(where, Clauses), ?MODULE) ++
+           case Type of
+             first -> " LIMIT 1";
+             _ -> ""
+           end,
+           % TODO : add GROUP BY, ORDER BY, LIMIT
   lager:debug("~s", [SQLCmd]),
   case exec(SQLCmd, Conn) of
     {result_packet, _, _, [], _} -> [];
@@ -107,10 +136,16 @@ select(Conn, Table, Type, Clauses) ->
       case Type of
         first -> 
           [Data|_] = emysql:as_json(Result),
-          Table:new(Conn, assoc(Table, Data));
+          case texas_sql:defined_table(Table) of
+            true -> Table:new(Conn, assoc(Table, Data));
+            _ -> assoc(Data)
+          end;
         _ ->
           lists:map(fun(Data) ->
-                Table:new(Conn, assoc(Table, Data))
+                case texas_sql:defined_table(Table) of
+                  true -> Table:new(Conn, assoc(Table, Data));
+                  _ -> assoc(Data)
+                end
             end, emysql:as_json(Result))
       end;
     {error_packet, _, _, _, E} -> {error, E}
@@ -118,28 +153,25 @@ select(Conn, Table, Type, Clauses) ->
 
 -spec update(connection(), tablename(), data(), [tuple()]) -> [data()] | {error, err()}.
 update(Conn, Table, Record, UpdateData) ->
-  Where = join(lists:foldl(fun(Field, W) ->
-            case Record:Field() of
-              undefined -> W;
-              Value -> W ++ [{Field, Value}]
-            end
-        end, [], Table:fields()), " AND "),
-  Set = join(UpdateData, ", "),
-  SQLCmd = "UPDATE " ++ texas_sql:to_sql_field(Table, ?FIELD_SEPARATOR) ++ " SET " ++ Set ++ " WHERE " ++ Where ++ ";",
+  SQLCmd = "UPDATE " ++
+           texas_sql:sql_field(Table, ?MODULE) ++
+           texas_sql:set_clause(UpdateData, ?MODULE) ++
+           texas_sql:where_clause(Record, ?MODULE),
   lager:debug("~s", [SQLCmd]),
   case exec(SQLCmd, Conn) of
     {ok_packet, _, _, _, _, _, _} ->
       UpdateRecord = lists:foldl(fun({Field, Value}, Rec) ->
               Rec:Field(Value)
           end, Record, UpdateData),
-      select(Conn, Table, all, [texas_sql:record_to_where_clause(Table, UpdateRecord, "`")]);
+      select(Conn, Table, all, [{where, UpdateRecord}]);
     {error_packet, _, _, _, E} -> {error, E}
   end.
 
 -spec delete(connection(), tablename(), data()) -> ok | {error, err()}.
 delete(Conn, Table, Record) ->
-  WhereClause = texas_sql:record_to_where_clause(Table, Record, "`"),
-  SQLCmd = sql(delete, atom_to_list(Table), sql(clause, [WhereClause])),
+  SQLCmd = "DELETE FROM " ++
+           texas_sql:sql_field(Table, ?MODULE) ++
+           texas_sql:where_clause(Record, ?MODULE),
   lager:debug("~s", [SQLCmd]),
   case exec(SQLCmd, Conn) of
     {ok_packet, _, _, _, _, _, _} -> ok;
@@ -156,21 +188,20 @@ assoc(Table, Datas) ->
         ACol = binary_to_atom(Col, utf8),
         case Value of
           null -> {ACol, undefined};
-          _ -> {ACol, texas_type:to(Table:type(ACol), Value)}
+          _ -> {ACol, texas_type:to(Table:'-type'(ACol), Value)}
+        end
+    end, Datas).
+assoc(Datas) ->
+  lists:map(fun({Col, Value}) ->
+        ACol = binary_to_atom(Col, utf8),
+        case Value of
+          null -> {ACol, undefined};
+          _ -> {ACol, Value}
         end
     end, Datas).
 
-join(KVList, Sep) ->
-  string:join(lists:map(fun({K, V}) ->
-          io_lib:format("`~p` = ~s", [K, texas_sql:to_sql_string(V, ?STRING_SEPARATOR, ?STRING_QUOTE)])
-      end, KVList), Sep).
-
 sql(create_table, Name, ColDefs) -> 
   "CREATE TABLE IF NOT EXISTS `" ++ Name ++ "` (" ++ string:join(ColDefs, ", ") ++ ");";
-sql(select, Name, Clauses) ->
-  "SELECT * FROM `" ++ Name ++ "` " ++ string:join(Clauses, " ") ++ ";";
-sql(delete, Name, Clauses) ->
-  "DELETE FROM `" ++ Name ++ "` " ++ string:join(Clauses, " ") ++ ";";
 sql(type, id, {ok, Len}) -> " INTEGER(" ++ integer_to_list(Len) ++ ")";
 sql(type, id, _) -> " INTEGER";
 sql(type, integer, {ok, Len}) -> " INTEGER(" ++ integer_to_list(Len) ++ ")";
@@ -179,8 +210,6 @@ sql(type, string, {ok, Len}) -> " VARCHAR(" ++ integer_to_list(Len) ++ ")";
 sql(type, string, _) -> " TEXT";
 sql(type, float, _) -> " REAL";
 sql(type, _, _) -> " TEXT".
-sql(insert, Table, Fields, Values) ->
-  "INSERT INTO `" ++ Table ++ "` (" ++ string:join(Fields, ", ") ++ ") VALUES (" ++ string:join(Values, ", ") ++ ");".
 sql(column_def, Name, Type, Len, Autoincrement, NotNull, Unique, Default) ->
   "`" ++ Name ++ "`" ++ 
   sql(type, Type, Len) ++ 
@@ -188,23 +217,8 @@ sql(column_def, Name, Type, Len, Autoincrement, NotNull, Unique, Default) ->
   sql(notnull, NotNull) ++
   sql(unique, Unique) ++
   sql(default, Default).
-sql(type, first) -> " LIMIT 1";
-sql(type, _) -> "";
-sql(where, Data) -> "WHERE " ++ Data;
-sql(group, Data) -> "GROUP BY " ++ Data;
-sql(order, Data) -> "ORDER BY " ++ Data;
-sql(limit, Data) -> "LIMIT " ++ Data;
 sql(autoinc, {ok, true}) -> " AUTO_INCREMENT PRIMARY KEY";
 sql(notnull, {ok, true}) -> " NOT NULL";
 sql(unique, {ok, true}) -> " UNIQUE";
-sql(default, {ok, Value}) -> io_lib:format(" DEFAULT ~s", [texas_sql:to_sql_string(Value, ?STRING_SEPARATOR, ?STRING_QUOTE)]);
-sql(clause, Clauses) when is_list(Clauses) ->
-  lists:map(fun(Clause) -> sql(clause, Clause) end, Clauses);
-sql(clause, {Type, Str, Params}) ->
-  WhereClause = lists:foldl(fun({Field, Value}, Clause) ->
-          estring:gsub(Clause, ":" ++ atom_to_list(Field), texas_sql:to_sql_string(Value, ?STRING_SEPARATOR, ?STRING_QUOTE))
-      end, Str, Params),
-  sql(Type, WhereClause);
-sql(clause, {Type, Str}) ->
-  sql(clause, {Type, Str, []});
+sql(default, {ok, Value}) -> io_lib:format(" DEFAULT ~s", [texas_sql:sql_string(Value, ?MODULE)]);
 sql(_, _) -> "".
