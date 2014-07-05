@@ -2,7 +2,7 @@
 
 -export([start/0]).
 -export([connect/6, exec/2, close/1]).
--export([create_table/2, create_table/3]).
+-export([create_table/2, create_table/3, drop_table/2]).
 -export([insert/3, select/4, update/4, delete/3]).
 -export([string_separator/0, string_quote/0, field_separator/0]).
 
@@ -93,6 +93,15 @@ create_table(Conn, Table, Fields) ->
               texas_sql:get_option(unique, Options),
               texas_sql:get_option(default, Options))
         end, Fields)),
+  lager:debug("~s", [SQLCmd]),
+  case exec(SQLCmd, Conn) of 
+    {ok_packet, _, _, _, _, _, _} -> ok;
+    _ -> error
+  end.
+
+-spec drop_table(connection(), tablename()) -> ok | error.
+drop_table(Conn, Table) ->
+  SQLCmd = "DROP TABLE IF EXISTS " ++ atom_to_list(Table),
   lager:debug("~s", [SQLCmd]),
   case exec(SQLCmd, Conn) of 
     {ok_packet, _, _, _, _, _, _} -> ok;
