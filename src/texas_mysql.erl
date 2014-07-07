@@ -5,6 +5,7 @@
 -export([create_table/2, create_table/3, drop_table/2]).
 -export([insert/3, select/4, update/4, delete/3]).
 -export([string_separator/0, string_quote/0, field_separator/0]).
+-export([where_null/2, set_null/1]).
 
 -define(STRING_SEPARATOR, $").
 -define(STRING_QUOTE, $\\).
@@ -22,6 +23,9 @@
 string_separator() -> ?STRING_SEPARATOR.
 string_quote()     -> ?STRING_QUOTE.
 field_separator()  -> ?FIELD_SEPARATOR.
+where_null("=", Key)  -> io_lib:format("~s IS NULL", [texas_sql:sql_field(Key, ?MODULE)]);
+where_null(_, Key)  -> io_lib:format("~s IS NOT NULL", [texas_sql:sql_field(Key, ?MODULE)]).
+set_null(Key)  -> io_lib:format("~s = NULL", [texas_sql:sql_field(Key, ?MODULE)]).
 
 -spec start() -> ok.
 start() ->
