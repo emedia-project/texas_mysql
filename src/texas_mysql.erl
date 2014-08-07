@@ -222,16 +222,23 @@ sql(type, integer, _) -> " INTEGER";
 sql(type, string, {ok, Len}) -> " VARCHAR(" ++ integer_to_list(Len) ++ ")";
 sql(type, string, _) -> " TEXT";
 sql(type, float, _) -> " REAL";
-sql(type, _, _) -> " TEXT".
+sql(type, date, _) -> " DATE";
+sql(type, time, _) -> " TIME";
+sql(type, datetime, _) -> " DATETIME";
+sql(type, _, _) -> " TEXT";
+sql(default, date, {ok, now}) -> " DEFAULT CURRENT_DATE";
+sql(default, time, {ok, now}) -> " DEFAULT CURRENT_TIME";
+sql(default, datetime, {ok, now}) -> " DEFAULT CURRENT_TIMESTAMP";
+sql(default, _, {ok, Value}) -> io_lib:format(" DEFAULT ~s", [texas_sql:sql_string(Value, ?MODULE)]);
+sql(default, _, _) -> "".
 sql(column_def, Name, Type, Len, Autoincrement, NotNull, Unique, Default) ->
   "`" ++ Name ++ "`" ++ 
   sql(type, Type, Len) ++ 
   sql(autoinc, Autoincrement) ++ 
   sql(notnull, NotNull) ++
   sql(unique, Unique) ++
-  sql(default, Default).
+  sql(default, Type, Default).
 sql(autoinc, {ok, true}) -> " AUTO_INCREMENT PRIMARY KEY";
 sql(notnull, {ok, true}) -> " NOT NULL";
 sql(unique, {ok, true}) -> " UNIQUE";
-sql(default, {ok, Value}) -> io_lib:format(" DEFAULT ~s", [texas_sql:sql_string(Value, ?MODULE)]);
 sql(_, _) -> "".
