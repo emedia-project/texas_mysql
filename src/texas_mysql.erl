@@ -3,7 +3,7 @@
 -export([start/0]).
 -export([connect/6, exec/2, close/1]).
 -export([create_table/2, create_table/3, drop_table/2]).
--export([insert/3, select/4, update/4, delete/3]).
+-export([insert/3, select/4, count/3, update/4, delete/3]).
 -export([string_separator/0, string_quote/0, field_separator/0]).
 -export([where_null/2, set_null/1]).
 
@@ -33,7 +33,7 @@ start() ->
   application:start(emysql),
   ok.
 
--spec connect(string(), string(), string(), integer(), string(), any()) -> 
+-spec connect(string(), string(), string(), integer(), string(), any()) ->
   {ok, connection()} | {error, err()}.
 connect(User, Password, Server, Port, Database, Options) ->
   lager:debug("Open database ~p", [Database]),
@@ -53,7 +53,7 @@ connect(User, Password, Server, Port, Database, Options) ->
 
 -spec close(connection()) -> ok | error.
 close(Conn) ->
-  try 
+  try
     emysql:remove_pool(texas:connection(Conn))
   catch
     _:_ -> error
@@ -62,11 +62,11 @@ close(Conn) ->
 -spec create_table(connection(), tablename()) -> ok | error.
 create_table(Conn, Table) ->
   SQLCmd = sql(
-    create_table, 
-    atom_to_list(Table), 
+    create_table,
+    atom_to_list(Table),
     lists:map(fun(Field) ->
             sql(
-              column_def, 
+              column_def,
               atom_to_list(Field),
               Table:'-type'(Field),
               Table:'-len'(Field),
@@ -76,7 +76,7 @@ create_table(Conn, Table) ->
               Table:'-default'(Field))
         end, Table:'-fields'())),
   lager:debug("~s", [SQLCmd]),
-  case exec(SQLCmd, Conn) of 
+  case exec(SQLCmd, Conn) of
     {ok_packet, _, _, _, _, _, _} -> ok;
     _ -> error
   end.
@@ -84,11 +84,11 @@ create_table(Conn, Table) ->
 -spec create_table(connection(), tablename(), list()) -> ok | error.
 create_table(Conn, Table, Fields) ->
   SQLCmd = sql(
-    create_table, 
-    atom_to_list(Table), 
+    create_table,
+    atom_to_list(Table),
     lists:map(fun({Field, Options}) ->
             sql(
-              column_def, 
+              column_def,
               atom_to_list(Field),
               texas_sql:get_option(type, Options),
               texas_sql:get_option(len, Options),
@@ -98,7 +98,7 @@ create_table(Conn, Table, Fields) ->
               texas_sql:get_option(default, Options))
         end, Fields)),
   lager:debug("~s", [SQLCmd]),
-  case exec(SQLCmd, Conn) of 
+  case exec(SQLCmd, Conn) of
     {ok_packet, _, _, _, _, _, _} -> ok;
     _ -> error
   end.
@@ -107,14 +107,14 @@ create_table(Conn, Table, Fields) ->
 drop_table(Conn, Table) ->
   SQLCmd = "DROP TABLE IF EXISTS " ++ atom_to_list(Table),
   lager:debug("~s", [SQLCmd]),
-  case exec(SQLCmd, Conn) of 
+  case exec(SQLCmd, Conn) of
     {ok_packet, _, _, _, _, _, _} -> ok;
     _ -> error
   end.
 
 -spec insert(connection(), tablename(), data() | list()) -> data() | ok | {error, err()}.
 insert(Conn, Table, Record) ->
-  SQLCmd = "INSERT INTO " ++ 
+  SQLCmd = "INSERT INTO " ++
            texas_sql:sql_field(Table, ?MODULE) ++
            texas_sql:insert_clause(Record, ?MODULE),
   lager:debug("~s", [SQLCmd]),
@@ -131,9 +131,9 @@ insert(Conn, Table, Record) ->
     {error_packet, _, _, _, E} -> {error, E}
   end.
 
--spec select(connection(), tablename(), first | all, clauses()) -> 
+-spec select(connection(), tablename(), first | all, clauses()) ->
   data() | [data()] | [] | {error, err()}.
-select(Conn, Table, Type, Clauses) -> 
+select(Conn, Table, Type, Clauses) ->
   SQLCmd = "SELECT * FROM " ++
            texas_sql:sql_field(Table, ?MODULE) ++
            texas_sql:where_clause(texas_sql:clause(where, Clauses), ?MODULE) ++
@@ -145,9 +145,9 @@ select(Conn, Table, Type, Clauses) ->
   lager:debug("~s", [SQLCmd]),
   case exec(SQLCmd, Conn) of
     {result_packet, _, _, [], _} -> [];
-    {result_packet, _, _, _, _} = Result -> 
+    {result_packet, _, _, _, _} = Result ->
       case Type of
-        first -> 
+        first ->
           [Data|_] = emysql:as_json(Result),
           case texas_sql:defined_table(Table) of
             true -> Table:new(Conn, assoc(Table, Data));
@@ -162,6 +162,16 @@ select(Conn, Table, Type, Clauses) ->
             end, emysql:as_json(Result))
       end;
     {error_packet, _, _, _, E} -> {error, E}
+  end.
+
+count(Conn, Table, Clauses) ->
+  SQLCmd = "SELECT COUNT(*) FROM " ++
+           texas_sql:sql_field(Table, ?MODULE) ++
+           texas_sql:where_clause(texas_sql:clause(where, Clauses), ?MODULE),
+  lager:debug("~s", [SQLCmd]),
+  case exec(SQLCmd, Conn) of
+    {result_packet, _, _, [[N]], _} -> N;
+    _ -> 0
   end.
 
 -spec update(connection(), tablename(), data(), [tuple()]) -> [data()] | {error, err()}.
@@ -213,7 +223,7 @@ assoc(Datas) ->
         end
     end, Datas).
 
-sql(create_table, Name, ColDefs) -> 
+sql(create_table, Name, ColDefs) ->
   "CREATE TABLE IF NOT EXISTS `" ++ Name ++ "` (" ++ string:join(ColDefs, ", ") ++ ");";
 sql(type, id, {ok, Len}) -> " INTEGER(" ++ integer_to_list(Len) ++ ")";
 sql(type, id, _) -> " INTEGER";
@@ -232,9 +242,9 @@ sql(default, datetime, {ok, now}) -> " DEFAULT CURRENT_TIMESTAMP";
 sql(default, _, {ok, Value}) -> io_lib:format(" DEFAULT ~s", [texas_sql:sql_string(Value, ?MODULE)]);
 sql(default, _, _) -> "".
 sql(column_def, Name, Type, Len, Autoincrement, NotNull, Unique, Default) ->
-  "`" ++ Name ++ "`" ++ 
-  sql(type, Type, Len) ++ 
-  sql(autoinc, Autoincrement) ++ 
+  "`" ++ Name ++ "`" ++
+  sql(type, Type, Len) ++
+  sql(autoinc, Autoincrement) ++
   sql(notnull, NotNull) ++
   sql(unique, Unique) ++
   sql(default, Type, Default).
