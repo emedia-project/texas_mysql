@@ -3,6 +3,7 @@
   {description, "mysql driver for texas"},
   {vsn, "0.0.1"},
   {registered, []},
+  {modules, []},
   {applications, [
                   kernel,
                   stdlib
