@@ -1,4 +1,5 @@
 -module(texas_mysql).
+-compile([{parse_transform, lager_transform}]).
 
 -export([start/0]).
 -export([connect/6, exec/2, close/1]).
