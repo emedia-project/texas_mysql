@@ -1,9 +1,18 @@
-PROJECT = texas_mysql
+.PHONY: doc
+REBAR = ./rebar3
 
-DEPS = emysql lager texas_adapter
-dep_emysql = git https://github.com/processone/Emysql.git master
-dep_lager = git https://github.com/basho/lager.git master
-dep_texas_adapter = git https://github.com/emedia-project/texas_adapter.git master
+compile:
+	@$(REBAR) compile
 
-include erlang.mk
+tests:
+	@$(REBAR) eunit
+
+elixir:
+	@$(REBAR) elixir generate_mix
+	@$(REBAR) elixir generate_lib
+
+dist: compile tests elixir
+
+distclean:
+	@rm -rf _build rebar.lock mix.lock test/eunit
 
