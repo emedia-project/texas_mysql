@@ -15,8 +15,7 @@ defmodule Texas.Mysql.Mixfile do
   def application do
     [
        applications: [],
-       env: [],
-       mod: {}
+       env: []
     ]
   end
 
